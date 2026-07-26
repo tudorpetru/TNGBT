@@ -259,7 +259,7 @@ def main():
         file_lst.append(file_context)
     total_files = len(file_lst)
 
-    vocab = {}
+    vocab = {"the"}
     for file_context in file_lst:
         all_tokens = file_context.split()
 
