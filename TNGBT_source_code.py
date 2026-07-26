@@ -6,6 +6,7 @@ import torch.nn as nn
 import torch.nn.functional as F
 import os
 from pathlib import Path
+import heapq
 
 seed = 3890343
 
@@ -107,28 +108,46 @@ def predict_word_transformer(model, tokens, token_to_id, id_to_token, max_new_to
 
     return out_lst
 
-def train_model(data, win_size, vocab, conns, current_chunk):
-    seq = get_window_seq_data(data, win_size)
+def train_model(data_tokens, win_size, vocab, conns_sizes, current_chunk, length_max, heap_dict, version):
+    seq = get_window_seq_data(data_tokens, win_size)
+
+    conns = conns_sizes[win_size]
+    heap = heap_dict[win_size]["heap"]
 
     prev_vocab = set(vocab)
-    data_tokens = set(data.split())
-    tokens = data_tokens - prev_vocab
-
+    tokens = set(data_tokens) - prev_vocab
     vocab = sorted(prev_vocab | tokens)
 
     for context_toks, target_tok in seq:
         context = tuple(context_toks)
 
-        if context not in conns:
-            conns[context] = {"total": 0, "targets": {}, "seen": current_chunk, "age": 0}
+        if context in conns:
+            conns[context]["total"] += 1
+            conns[context]["estimate"] += 1
+        elif len(conns) < length_max:
+            conns[context] = {"total": 1, "targets": {}, "seen": current_chunk, "age": 0, "estimate": 1, "error": 0, "heap_version": 0}
+        else:
+            while True:
+                min_estimate, min_version, min_context = heap[0]
+                if min_context in conns and conns[min_context]["heap_version"] == min_version:
+                    heapq.heappop(heap)
+                    break
+                heapq.heappop(heap)
 
-        conns[context]["total"] += 1
+            del conns[min_context]
+
+            estimate = min_estimate + 1
+            conns[context] = {"total": estimate, "targets": {}, "seen": current_chunk, "age": 0, "estimate": estimate, "error": min_estimate, "heap_version": 0}
+
+        version += 1
         conns[context]["seen"] = current_chunk
+        conns[context]["heap_version"] = version
+        heapq.heappush(heap, (conns[context]["estimate"], version, context))
 
         targets = conns[context]["targets"]
-        targets[target_tok] = (targets.get(target_tok, 0) + 1)
+        targets[target_tok] = targets.get(target_tok, 0) + 1
 
-    return vocab, conns
+    return vocab, conns_sizes, heap_dict, version
 
 def n_gram_correction(model, optimizer, vocab_size, token_to_id, conns, context_size, replay_threshold, n_gram_power):
     batch_size = 256
@@ -234,10 +253,11 @@ def basic_punctuation_spacer(string):
 
 def main():
     max_new_tokens = 10
-    epochs = 5
+    length_max = 60000
+    epochs = 7000
 
     n_gram_power = 0.25
-    replay_threshold = 6
+    replay_threshold = 8
 
     temperature = 1
     win_size = 32
@@ -249,6 +269,9 @@ def main():
     d_ff = 512
     dropout = 0.1
 
+    context_windows = [3, 4, 6, 8, 12, 16, 24, 32]
+    version = 0
+
     path = Path(rf"TRAINING DATA PATH HERE")
 
     file_lst = []
@@ -257,6 +280,7 @@ def main():
         
         file_context = basic_punctuation_spacer(read_file(file_path)).lower()
         file_lst.append(file_context)
+    
     total_files = len(file_lst)
 
     vocab = {"the"}
@@ -276,22 +300,33 @@ def main():
     for token, token_id in token_to_id.items():
         id_to_token[token_id] = token
 
+    heap_dict = {}
     conns = {}
+    for num in context_windows:
+        heap_dict[num] = {"heap": [], "contexts": set()}
+        conns[num] = {}
+
     n_gram_vocab = []
 
     model = Transformer(vocab_size=len(vocab), context_size=win_size, d_model=d_model, n_heads=n_heads, n_layers=n_layers, d_ff=d_ff, dropout=dropout).to(device)
     optimizer = torch.optim.AdamW(model.parameters(), lr=transformer_lr, weight_decay=0.01)
+    
     for current_file, file_data in enumerate(file_lst, start=1):
         all_task_tokens = file_data.split()
-        data2_lst = all_task_tokens[:int(len(all_task_tokens) * 0.8)]
+        split_index = int(len(all_task_tokens) * 0.8)
+        data2_lst = all_task_tokens[:split_index]
 
         print(f"Current File: {current_file}/{total_files}")
 
-        for i in [3, 4, 6, 8, 12, 16, 24, 32]:
-            n_gram_vocab, conns = train_model(" ".join(data2_lst), i, n_gram_vocab, conns, current_file)
+        for i in context_windows:
+            n_gram_vocab, conns, heap_dict, version = train_model(data2_lst, i, n_gram_vocab, conns, current_file, length_max, heap_dict, version)
+
+        singular_dict_conns = {}
+        for dct in conns.values():
+            singular_dict_conns.update(dct)
 
         for epoch in range(epochs):
-            conns = n_gram_correction(model, optimizer, len(vocab), token_to_id, conns, win_size, replay_threshold, n_gram_power)
+            singular_dict_conns = n_gram_correction(model, optimizer, len(vocab), token_to_id, singular_dict_conns, win_size, replay_threshold, n_gram_power)
 
     while True:
         tokens = basic_punctuation_spacer(input("input: ")).lower().split()
