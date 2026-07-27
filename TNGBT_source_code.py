@@ -86,10 +86,7 @@ def predict_word_transformer(model, tokens, token_to_id, id_to_token, max_new_to
     model.eval()
     model_device = next(model.parameters()).device
 
-    token_ids = []
-    for token in tokens:
-        token_ids.append(token_to_id[token])
-
+    token_ids = [token_ids.append(token_to_id[token]) for token in tokens]
     out = torch.tensor([token_ids], dtype=torch.long, device=model_device)
 
     with torch.no_grad():
@@ -102,9 +99,7 @@ def predict_word_transformer(model, tokens, token_to_id, id_to_token, max_new_to
             next_tok = torch.multinomial(probs, num_samples=1)
             out = torch.cat([out, next_tok.reshape(1, 1)], dim=1)
 
-    out_lst = []
-    for token_id in out[0].tolist():
-        out_lst.append(id_to_token[token_id])
+    out_lst = [out_lst.append(id_to_token[token_id]) for token_id in out[0].tolist()]
 
     return out_lst
 
@@ -194,9 +189,7 @@ def n_gram_correction(model, optimizer, vocab_size, token_to_id, conns, context_
             target_counts = conns[context]["targets"]
             total_count = conns[context]["total"]
 
-            context_ids = []
-            for token in context:
-                context_ids.append(token_to_id[token])
+            context_ids = [context_ids.append(token_to_id[token]) for token in context]
             n_gram_probs = torch.zeros(vocab_size, dtype=torch.float32)
 
             for target_token, count in target_counts.items():
