@@ -218,9 +218,7 @@ def n_gram_correction(model, optimizer, vocab_size, token_to_id, conns, context_
         transformer_log_probs = F.log_softmax(transformer_logits, dim=-1)
         transformer_probs = (transformer_log_probs.exp().detach())
 
-        n_gram_probs = torch.stack(probs).to(model_device)
         confidence = torch.tensor(confidences, dtype=torch.float32, device=model_device).unsqueeze(1)
-        
         correction_targets = ((1 - n_gram_power) * transformer_probs + n_gram_power * (confidence * n_gram_probs + (1 - confidence) * transformer_probs)).detach()
 
         per_data_loss = -(correction_targets * transformer_log_probs).sum(dim=-1)
