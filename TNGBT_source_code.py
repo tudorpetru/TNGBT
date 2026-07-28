@@ -103,7 +103,7 @@ def predict_word_transformer(model, tokens, token_to_id, id_to_token, max_new_to
 
     return out_lst
 
-def train_model(data_tokens, win_size, vocab, conns_sizes, current_chunk, conns_bank, heap_dict, version):
+def train_model(data_tokens, win_size, vocab, conns_sizes, current_chunk, conns_bank_max, heap_dict, version):
     seq = get_window_seq_data(data_tokens, win_size)
 
     conns = conns_sizes[win_size]
@@ -119,7 +119,7 @@ def train_model(data_tokens, win_size, vocab, conns_sizes, current_chunk, conns_
         if context in conns:
             conns[context]["total"] += 1
             conns[context]["estimate"] += 1
-        elif len(conns) < conns_bank:
+        elif len(conns) < conns_bank_max:
             conns[context] = {"total": 1, "targets": {}, "seen": current_chunk, "age": 0, "estimate": 1, "error": 0, "heap_version": 0}
         else:
             while True:
@@ -243,16 +243,17 @@ def basic_punctuation_spacer(string):
     return string.replace(".", " . ").replace("?", " ? ").replace("!", " ! ").replace(",", " , ").replace(")", " ) ").replace("(", " ( ").replace("[", " [ ").replace("]", " ] ").replace("'", " ' ").replace('"', ' " ').replace(":", " : ").replace(";", " ; ")
 
 def main():
-    max_new_tokens = 10
-    conns_bank = 60000
+    conns_bank_max = 60000
     epochs = 350
 
     n_gram_influence = 0.25
     districts = 8
 
-    temperature = 1
     win_size = 32
+
+    temperature = 1
     transformer_lr = 3e-4
+    max_new_tokens = 10
 
     d_model = 128
     n_heads = 4
@@ -310,7 +311,7 @@ def main():
         print(f"Current File: {current_file}/{total_files}")
 
         for i in context_windows:
-            n_gram_vocab, conns, heap_dict, version = train_model(data2_lst, i, n_gram_vocab, conns, current_file, conns_bank, heap_dict, version)
+            n_gram_vocab, conns, heap_dict, version = train_model(data2_lst, i, n_gram_vocab, conns, current_file, conns_bank_max, heap_dict, version)
 
         singular_dict_conns = {}
         for dct in conns.values():
