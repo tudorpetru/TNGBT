@@ -103,7 +103,7 @@ def predict_word_transformer(model, tokens, token_to_id, id_to_token, max_new_to
 
     return out_lst
 
-def train_model(data_tokens, win_size, vocab, conns_sizes, current_chunk, length_max, heap_dict, version):
+def train_model(data_tokens, win_size, vocab, conns_sizes, current_chunk, conns_bank, heap_dict, version):
     seq = get_window_seq_data(data_tokens, win_size)
 
     conns = conns_sizes[win_size]
@@ -119,7 +119,7 @@ def train_model(data_tokens, win_size, vocab, conns_sizes, current_chunk, length
         if context in conns:
             conns[context]["total"] += 1
             conns[context]["estimate"] += 1
-        elif len(conns) < length_max:
+        elif len(conns) < conns_bank:
             conns[context] = {"total": 1, "targets": {}, "seen": current_chunk, "age": 0, "estimate": 1, "error": 0, "heap_version": 0}
         else:
             while True:
@@ -144,14 +144,14 @@ def train_model(data_tokens, win_size, vocab, conns_sizes, current_chunk, length
 
     return vocab, conns_sizes, heap_dict, version
 
-def n_gram_correction(model, optimizer, vocab_size, token_to_id, conns, context_size, replay_threshold, n_gram_power):
+def n_gram_correction(model, optimizer, vocab_size, token_to_id, conns, context_size, districts, n_gram_influence):
     batch_size = 256
 
     contexts_length = {}
     for context in conns:
         context_length = len(context)
 
-        if 1 <= context_length and context_length <= context_size and conns[context]["age"] >= replay_threshold:
+        if 1 <= context_length and context_length <= context_size and conns[context]["age"] >= districts:
             contexts_length.setdefault(context_length, []).append(context)
 
     for context, conn in conns.items():
@@ -219,7 +219,7 @@ def n_gram_correction(model, optimizer, vocab_size, token_to_id, conns, context_
         transformer_probs = (transformer_log_probs.exp().detach())
 
         confidence = torch.tensor(confidences, dtype=torch.float32, device=model_device).unsqueeze(1)
-        correction_targets = ((1 - n_gram_power) * transformer_probs + n_gram_power * (confidence * n_gram_probs + (1 - confidence) * transformer_probs)).detach()
+        correction_targets = ((1 - n_gram_influence) * transformer_probs + n_gram_influence * (confidence * n_gram_probs + (1 - confidence) * transformer_probs)).detach()
 
         per_data_loss = -(correction_targets * transformer_log_probs).sum(dim=-1)
         total_loss = (total_loss + per_data_loss.sum())
@@ -244,11 +244,11 @@ def basic_punctuation_spacer(string):
 
 def main():
     max_new_tokens = 10
-    length_max = 60000
-    epochs = 7000
+    conns_bank = 60000
+    epochs = 350
 
-    n_gram_power = 0.25
-    replay_threshold = 8
+    n_gram_influence = 0.25
+    districts = 8
 
     temperature = 1
     win_size = 32
@@ -310,14 +310,14 @@ def main():
         print(f"Current File: {current_file}/{total_files}")
 
         for i in context_windows:
-            n_gram_vocab, conns, heap_dict, version = train_model(data2_lst, i, n_gram_vocab, conns, current_file, length_max, heap_dict, version)
+            n_gram_vocab, conns, heap_dict, version = train_model(data2_lst, i, n_gram_vocab, conns, current_file, conns_bank, heap_dict, version)
 
         singular_dict_conns = {}
         for dct in conns.values():
             singular_dict_conns.update(dct)
 
         for epoch in range(epochs):
-            singular_dict_conns = n_gram_correction(model, optimizer, len(vocab), token_to_id, singular_dict_conns, win_size, replay_threshold, n_gram_power)
+            singular_dict_conns = n_gram_correction(model, optimizer, len(vocab), token_to_id, singular_dict_conns, win_size, districts, n_gram_influence)
 
     while True:
         tokens = basic_punctuation_spacer(input("input: ")).lower().split()
