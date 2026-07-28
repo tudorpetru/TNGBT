@@ -8,7 +8,7 @@ import os
 from pathlib import Path
 import heapq
 
-seed = 3890343
+seed = 383904343
 
 torch.manual_seed(seed)
 random.seed(seed)
