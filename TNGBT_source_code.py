@@ -119,7 +119,7 @@ def train_model(data_tokens, win_size, vocab, conns_sizes, current_chunk, conns_
         if context in conns:
             conns[context]["total"] += 1
             conns[context]["estimate"] += 1
-        elif len(conns) < conns_bank_max:
+        elif len(conns) < conns_bank_max[win_size]:
             conns[context] = {"total": 1, "targets": {}, "seen": current_chunk, "age": 0, "estimate": 1, "error": 0, "heap_version": 0}
         else:
             while True:
@@ -198,7 +198,7 @@ def n_gram_correction(model, optimizer, vocab_size, token_to_id, conns, context_
 
             inputs.append(context_ids)
             probs.append(n_gram_probs)
-            confidences.append(total_count / (total_count + 5))
+            confidences.append(total_count / (total_count + 2))
 
         if not inputs:
             continue
@@ -243,11 +243,11 @@ def basic_punctuation_spacer(string):
     return string.replace(".", " . ").replace("?", " ? ").replace("!", " ! ").replace(",", " , ").replace(")", " ) ").replace("(", " ( ").replace("[", " [ ").replace("]", " ] ").replace("'", " ' ").replace('"', ' " ').replace(":", " : ").replace(";", " ; ")
 
 def main():
-    conns_bank_max = 60000
-    epochs = 350
+    conns_bank_max = {3: 1000000, 4: 1000000, 6: 1000000, 8: 1000000, 12: 1200000, 16: 1400000, 24: 1600000, 32: 1850000}
+    epochs = 330
 
     n_gram_influence = 0.25
-    districts = 8
+    districts = 10
 
     win_size = 32
 
