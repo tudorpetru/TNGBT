@@ -246,7 +246,7 @@ def main():
     conns_bank_max = {3: 1000000, 4: 1100000, 6: 1200000, 8: 1300000, 12: 1400000, 16: 1600000, 24: 1800000, 32: 1900000}
     epochs = 330
 
-    n_gram_influence = 0.25
+    n_gram_influence = 0.35
     districts = 10
 
     win_size = 32
