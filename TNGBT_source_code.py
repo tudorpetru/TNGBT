@@ -243,7 +243,7 @@ def basic_punctuation_spacer(string):
     return string.replace(".", " . ").replace("?", " ? ").replace("!", " ! ").replace(",", " , ").replace(")", " ) ").replace("(", " ( ").replace("[", " [ ").replace("]", " ] ").replace("'", " ' ").replace('"', ' " ').replace(":", " : ").replace(";", " ; ")
 
 def main():
-    conns_bank_max = {3: 800000, 4: 900000, 6: 1000000, 8: 1100000, 12: 1200000, 16: 1400000, 24: 1600000, 32: 1850000}
+    conns_bank_max = {3: 1000000, 4: 1100000, 6: 1200000, 8: 1300000, 12: 1400000, 16: 1600000, 24: 1800000, 32: 1900000}
     epochs = 330
 
     n_gram_influence = 0.25
