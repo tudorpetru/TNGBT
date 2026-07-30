@@ -4,9 +4,9 @@ import random
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
+import heapq
 import os
 from pathlib import Path
-import heapq
 
 seed = 383904343
 
@@ -23,12 +23,12 @@ def read_file(path):
         return f.read()
  
 def get_window_seq_data(data: str, win_size):
-    data = data.split()
     out = []
-
+    
     for i in range(win_size, len(data)):
         context = data[i - win_size:i]
         target = data[i]
+        
         out.append((context, target))
 
     return out
@@ -82,11 +82,12 @@ class Transformer(nn.Module):
 
         return logits, loss
 
-def predict_word_transformer(model, tokens, token_to_id, id_to_token, max_new_tokens, temperature):
+def predict_word_transformer(model, tokens, token_to_id, id_to_token, max_new_tokens, temperature,):
     model.eval()
     model_device = next(model.parameters()).device
 
     token_ids = [token_to_id[token] for token in tokens]
+
     out = torch.tensor([token_ids], dtype=torch.long, device=model_device)
 
     with torch.no_grad():
@@ -103,7 +104,7 @@ def predict_word_transformer(model, tokens, token_to_id, id_to_token, max_new_to
 
     return out_lst
 
-def train_model(data_tokens, win_size, conns_sizes, current_chunk, conns_bank_max, heap_dict, version):
+def train_model(data_tokens, win_size, conns_sizes, current_chunk, conns_bank_max, heap_dict, version, valid_heap):
     seq = get_window_seq_data(data_tokens, win_size)
 
     conns = conns_sizes[win_size]
@@ -117,6 +118,7 @@ def train_model(data_tokens, win_size, conns_sizes, current_chunk, conns_bank_ma
             conns[context]["estimate"] += 1
         elif len(conns) < conns_bank_max[win_size]:
             conns[context] = {"total": 1, "targets": {}, "seen": current_chunk, "start_epoch": 0, "estimate": 1, "error": 0, "heap_version": 0}
+            heapq.heappush(valid_heap[win_size], (0, version, context))
         else:
             while True:
                 min_estimate, min_version, min_context = heap[0]
@@ -124,11 +126,11 @@ def train_model(data_tokens, win_size, conns_sizes, current_chunk, conns_bank_ma
                     heapq.heappop(heap)
                     break
                 heapq.heappop(heap)
-
             del conns[min_context]
 
             estimate = min_estimate + 1
             conns[context] = {"total": estimate, "targets": {}, "seen": current_chunk, "start_epoch": 0, "estimate": estimate, "error": min_estimate, "heap_version": 0}
+            heapq.heappush(valid_heap[win_size], (0, version, context))
 
         version += 1
         conns[context]["seen"] = current_chunk
@@ -140,21 +142,14 @@ def train_model(data_tokens, win_size, conns_sizes, current_chunk, conns_bank_ma
 
     return conns_sizes, heap_dict, version
 
-def n_gram_correction(model, optimizer, vocab_size, token_to_id, conns, context_size, districts, n_gram_influence, current_epoch):
+def n_gram_correction(model, optimizer, vocab_size, token_to_id, conns, districts, n_gram_influence, current_epoch, valid_heap, version):
     batch_size = 256
 
-    contexts_length = {}
-    for context in conns:
-        context_length = len(context)
-
-        if 1 <= context_length and context_length <= context_size and (current_epoch - conns[context]["start_epoch"]) >= districts:
-            contexts_length.setdefault(context_length, []).append(context)
-
+    contexts_length = [win_size for win_size in valid_heap if valid_heap[win_size] and (current_epoch - valid_heap[win_size][0][0]) >= districts]
     if not contexts_length:
-        return conns
+        return conns, version
 
     lengths = sorted(contexts_length)
-
     samples_length = max(1, batch_size // len(lengths))
     samples_active = max(0, batch_size - (samples_length * len(lengths)))
 
@@ -172,17 +167,33 @@ def n_gram_correction(model, optimizer, vocab_size, token_to_id, conns, context_
         if index < samples_active:
             req_count += 1
 
-        chosen_contexts = random.sample(contexts_length[context_length], min(req_count, len(contexts_length[context_length])))
+        chosen_contexts = []
+        while valid_heap[context_length] and len(chosen_contexts) < req_count:
+            start_epoch, version, context = valid_heap[context_length][0]
+            if context not in conns or conns[context]["heap_version"] != version:
+                heapq.heappop(valid_heap[context_length])
+                continue
+            if current_epoch - start_epoch < districts:
+                break
+
+            heapq.heappop(valid_heap[context_length])
+            chosen_contexts.append(context)
         
         inputs = []
         probs = []
         confidences = []
         for context in chosen_contexts:
             conns[context]["start_epoch"] = current_epoch
+            
+            version += 1 
+            conns[context]["heap_version"] = version
+            heapq.heappush(valid_heap[context_length], (current_epoch, version, context))
+
             target_counts = conns[context]["targets"]
             total_count = conns[context]["total"]
 
-            context_ids = [token_to_id[token] for token in context]
+            context_ids = [(token_to_id[token]) for token in context]
+
             n_gram_probs = torch.zeros(vocab_size, dtype=torch.float32)
 
             for target_token, count in target_counts.items():
@@ -222,6 +233,9 @@ def n_gram_correction(model, optimizer, vocab_size, token_to_id, conns, context_
 
         sampled_counts[context_length] = data_count
 
+    if total_data == 0:
+        return conns, version
+    
     correction_loss = (total_loss / total_data)
     correction_loss.backward()
     torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1)
@@ -230,23 +244,22 @@ def n_gram_correction(model, optimizer, vocab_size, token_to_id, conns, context_
     if not model.training:
         model.eval()
 
-    return conns
+    return conns, version
 
 def basic_punctuation_spacer(string):
     return string.replace(".", " . ").replace("?", " ? ").replace("!", " ! ").replace(",", " , ").replace(")", " ) ").replace("(", " ( ").replace("[", " [ ").replace("]", " ] ").replace("'", " ' ").replace('"', ' " ').replace(":", " : ").replace(";", " ; ")
 
 def main():
+    max_new_tokens = 10
     conns_bank_max = {3: 1000000, 4: 1100000, 6: 1200000, 8: 1300000, 12: 1400000, 16: 1600000, 24: 1800000, 32: 1900000}
     epochs = 330
 
     n_gram_influence = 0.35
-    districts = 10
-
-    win_size = 32
+    districts = 8
 
     temperature = 1
+    win_size = 32
     transformer_lr = 3e-4
-    max_new_tokens = 10
 
     d_model = 128
     n_heads = 4
@@ -293,7 +306,8 @@ def main():
 
     model = Transformer(vocab_size=len(vocab), context_size=win_size, d_model=d_model, n_heads=n_heads, n_layers=n_layers, d_ff=d_ff, dropout=dropout).to(device)
     optimizer = torch.optim.AdamW(model.parameters(), lr=transformer_lr, weight_decay=0.01)
-    
+
+    valid_heap = {win_size: [] for win_size in context_windows}
     for current_file, file_data in enumerate(file_lst, start=1):
         all_task_tokens = file_data.split()
         split_index = int(len(all_task_tokens) * 0.8)
@@ -302,14 +316,14 @@ def main():
         print(f"Current File: {current_file}/{total_files}")
 
         for window_size in context_windows:
-            conns, heap_dict, version = train_model(data2_lst, window_size, conns, current_file, conns_bank_max, heap_dict, version)
+            conns, heap_dict, version = train_model(data2_lst, window_size, conns, current_file, conns_bank_max, heap_dict, version, valid_heap)
 
         singular_dict_conns = {}
         for dct in conns.values():
             singular_dict_conns.update(dct)
 
         for epoch in range(epochs):
-            singular_dict_conns = n_gram_correction(model, optimizer, len(vocab), token_to_id, singular_dict_conns, win_size, districts, n_gram_influence, epoch)
+            singular_dict_conns, version = n_gram_correction(model, optimizer, len(vocab), token_to_id, singular_dict_conns, districts, n_gram_influence, epoch, valid_heap, version)
 
     while True:
         tokens = basic_punctuation_spacer(input("input: ")).lower().split()
