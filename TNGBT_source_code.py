@@ -117,11 +117,9 @@ def train_model(data_tokens, win_size, conns_sizes, current_chunk, conns_bank_ma
         if context in conns:
             conns[context]["total"] += 1
             conns[context]["estimate"] += 1
-
         elif len(conns) < conns_bank_max[win_size]:
             conns[context] = {"total": 1, "targets": {}, "seen": current_chunk, "start_epoch": file_epoch, "estimate": 1, "error": 0, "heap_version": 0, "valid_version": 0}
             new_context = True
-
         else:
             while True:
                 min_estimate, min_version, min_context = heap[0]
