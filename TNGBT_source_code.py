@@ -120,7 +120,7 @@ def train_model(data_tokens, win_size, vocab, conns_sizes, current_chunk, conns_
             conns[context]["total"] += 1
             conns[context]["estimate"] += 1
         elif len(conns) < conns_bank_max[win_size]:
-            conns[context] = {"total": 1, "targets": {}, "seen": current_chunk, "age": 0, "estimate": 1, "error": 0, "heap_version": 0}
+            conns[context] = {"total": 1, "targets": {}, "seen": current_chunk, "start_epoch": 0, "estimate": 1, "error": 0, "heap_version": 0}
         else:
             while True:
                 min_estimate, min_version, min_context = heap[0]
@@ -132,7 +132,7 @@ def train_model(data_tokens, win_size, vocab, conns_sizes, current_chunk, conns_
             del conns[min_context]
 
             estimate = min_estimate + 1
-            conns[context] = {"total": estimate, "targets": {}, "seen": current_chunk, "age": 0, "estimate": estimate, "error": min_estimate, "heap_version": 0}
+            conns[context] = {"total": estimate, "targets": {}, "seen": current_chunk, "start_epoch": 0, "estimate": estimate, "error": min_estimate, "heap_version": 0}
 
         version += 1
         conns[context]["seen"] = current_chunk
@@ -144,18 +144,15 @@ def train_model(data_tokens, win_size, vocab, conns_sizes, current_chunk, conns_
 
     return vocab, conns_sizes, heap_dict, version
 
-def n_gram_correction(model, optimizer, vocab_size, token_to_id, conns, context_size, districts, n_gram_influence):
+def n_gram_correction(model, optimizer, vocab_size, token_to_id, conns, context_size, districts, n_gram_influence, current_epoch):
     batch_size = 256
 
     contexts_length = {}
     for context in conns:
         context_length = len(context)
 
-        if 1 <= context_length and context_length <= context_size and conns[context]["age"] >= districts:
+        if 1 <= context_length and context_length <= context_size and (current_epoch - conns[context]["start_epoch"]) >= districts:
             contexts_length.setdefault(context_length, []).append(context)
-
-    for context, conn in conns.items():
-        conn["age"] += 1
 
     if not contexts_length:
         return conns
@@ -185,7 +182,7 @@ def n_gram_correction(model, optimizer, vocab_size, token_to_id, conns, context_
         probs = []
         confidences = []
         for context in chosen_contexts:
-            conns[context]["age"] = 0
+            conns[context]["start_epoch"] = current_epoch
             target_counts = conns[context]["targets"]
             total_count = conns[context]["total"]
 
@@ -310,15 +307,15 @@ def main():
 
         print(f"Current File: {current_file}/{total_files}")
 
-        for i in context_windows:
-            n_gram_vocab, conns, heap_dict, version = train_model(data2_lst, i, n_gram_vocab, conns, current_file, conns_bank_max, heap_dict, version)
+        for window_size in context_windows:
+            n_gram_vocab, conns, heap_dict, version = train_model(data2_lst, window_size, n_gram_vocab, conns, current_file, conns_bank_max, heap_dict, version)
 
         singular_dict_conns = {}
         for dct in conns.values():
             singular_dict_conns.update(dct)
 
         for epoch in range(epochs):
-            singular_dict_conns = n_gram_correction(model, optimizer, len(vocab), token_to_id, singular_dict_conns, win_size, districts, n_gram_influence)
+            singular_dict_conns = n_gram_correction(model, optimizer, len(vocab), token_to_id, singular_dict_conns, win_size, districts, n_gram_influence, epoch)
 
     while True:
         tokens = basic_punctuation_spacer(input("input: ")).lower().split()
