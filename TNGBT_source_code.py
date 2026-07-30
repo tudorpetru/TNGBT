@@ -104,7 +104,7 @@ def predict_word_transformer(model, tokens, token_to_id, id_to_token, max_new_to
 
     return out_lst
 
-def train_model(data_tokens, win_size, conns_sizes, current_chunk, conns_bank_max, heap_dict, version, valid_heap):
+def train_model(data_tokens, win_size, conns_sizes, current_chunk, conns_bank_max, heap_dict, version, valid_heap, file_epoch):
     seq = get_window_seq_data(data_tokens, win_size)
 
     conns = conns_sizes[win_size]
@@ -112,30 +112,40 @@ def train_model(data_tokens, win_size, conns_sizes, current_chunk, conns_bank_ma
 
     for context_toks, target_tok in seq:
         context = tuple(context_toks)
+        new_context = False
 
         if context in conns:
             conns[context]["total"] += 1
             conns[context]["estimate"] += 1
+
         elif len(conns) < conns_bank_max[win_size]:
-            conns[context] = {"total": 1, "targets": {}, "seen": current_chunk, "start_epoch": 0, "estimate": 1, "error": 0, "heap_version": 0}
-            heapq.heappush(valid_heap[win_size], (0, version, context))
+            conns[context] = {"total": 1, "targets": {}, "seen": current_chunk, "start_epoch": file_epoch, "estimate": 1, "error": 0, "heap_version": 0, "valid_version": 0}
+            new_context = True
+
         else:
             while True:
                 min_estimate, min_version, min_context = heap[0]
                 if min_context in conns and conns[min_context]["heap_version"] == min_version:
                     heapq.heappop(heap)
                     break
+
                 heapq.heappop(heap)
             del conns[min_context]
 
             estimate = min_estimate + 1
-            conns[context] = {"total": estimate, "targets": {}, "seen": current_chunk, "start_epoch": 0, "estimate": estimate, "error": min_estimate, "heap_version": 0}
-            heapq.heappush(valid_heap[win_size], (0, version, context))
+            conns[context] = {"total": estimate, "targets": {}, "seen": current_chunk, "start_epoch": file_epoch, "estimate": estimate, "error": min_estimate, "heap_version": 0, "valid_version": 0}
+
+            new_context = True
 
         version += 1
         conns[context]["seen"] = current_chunk
         conns[context]["heap_version"] = version
         heapq.heappush(heap, (conns[context]["estimate"], version, context))
+
+        if new_context:
+            version += 1
+            conns[context]["valid_version"] = version
+            heapq.heappush(valid_heap[win_size], (file_epoch, version, context))
 
         targets = conns[context]["targets"]
         targets[target_tok] = targets.get(target_tok, 0) + 1
@@ -169,8 +179,8 @@ def n_gram_correction(model, optimizer, vocab_size, token_to_id, conns, district
 
         chosen_contexts = []
         while valid_heap[context_length] and len(chosen_contexts) < req_count:
-            start_epoch, version, context = valid_heap[context_length][0]
-            if context not in conns or conns[context]["heap_version"] != version:
+            start_epoch, entry_version, context = valid_heap[context_length][0]
+            if context not in conns or conns[context]["valid_version"] != entry_version:
                 heapq.heappop(valid_heap[context_length])
                 continue
             if current_epoch - start_epoch < districts:
@@ -186,7 +196,7 @@ def n_gram_correction(model, optimizer, vocab_size, token_to_id, conns, district
             conns[context]["start_epoch"] = current_epoch
             
             version += 1 
-            conns[context]["heap_version"] = version
+            conns[context]["valid_version"] = version
             heapq.heappush(valid_heap[context_length], (current_epoch, version, context))
 
             target_counts = conns[context]["targets"]
@@ -309,6 +319,8 @@ def main():
 
     valid_heap = {win_size: [] for win_size in context_windows}
     for current_file, file_data in enumerate(file_lst, start=1):
+        file_epoch = (current_file - 1) * epochs
+
         all_task_tokens = file_data.split()
         split_index = int(len(all_task_tokens) * 0.8)
         data2_lst = all_task_tokens[:split_index]
@@ -316,13 +328,14 @@ def main():
         print(f"Current File: {current_file}/{total_files}")
 
         for window_size in context_windows:
-            conns, heap_dict, version = train_model(data2_lst, window_size, conns, current_file, conns_bank_max, heap_dict, version, valid_heap)
+            conns, heap_dict, version = train_model(data2_lst, window_size, conns, current_file, conns_bank_max, heap_dict, version, valid_heap, file_epoch)
 
         singular_dict_conns = {}
         for dct in conns.values():
             singular_dict_conns.update(dct)
 
         for epoch in range(epochs):
+            epoch = file_epoch + epoch
             singular_dict_conns, version = n_gram_correction(model, optimizer, len(vocab), token_to_id, singular_dict_conns, districts, n_gram_influence, epoch, valid_heap, version)
 
     while True:
