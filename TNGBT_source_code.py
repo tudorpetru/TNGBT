@@ -103,15 +103,11 @@ def predict_word_transformer(model, tokens, token_to_id, id_to_token, max_new_to
 
     return out_lst
 
-def train_model(data_tokens, win_size, vocab, conns_sizes, current_chunk, conns_bank_max, heap_dict, version):
+def train_model(data_tokens, win_size, conns_sizes, current_chunk, conns_bank_max, heap_dict, version):
     seq = get_window_seq_data(data_tokens, win_size)
 
     conns = conns_sizes[win_size]
     heap = heap_dict[win_size]["heap"]
-
-    prev_vocab = set(vocab)
-    tokens = set(data_tokens) - prev_vocab
-    vocab = sorted(prev_vocab | tokens)
 
     for context_toks, target_tok in seq:
         context = tuple(context_toks)
@@ -142,7 +138,7 @@ def train_model(data_tokens, win_size, vocab, conns_sizes, current_chunk, conns_
         targets = conns[context]["targets"]
         targets[target_tok] = targets.get(target_tok, 0) + 1
 
-    return vocab, conns_sizes, heap_dict, version
+    return conns_sizes, heap_dict, version
 
 def n_gram_correction(model, optimizer, vocab_size, token_to_id, conns, context_size, districts, n_gram_influence, current_epoch):
     batch_size = 256
@@ -295,8 +291,6 @@ def main():
         heap_dict[num] = {"heap": [], "contexts": set()}
         conns[num] = {}
 
-    n_gram_vocab = []
-
     model = Transformer(vocab_size=len(vocab), context_size=win_size, d_model=d_model, n_heads=n_heads, n_layers=n_layers, d_ff=d_ff, dropout=dropout).to(device)
     optimizer = torch.optim.AdamW(model.parameters(), lr=transformer_lr, weight_decay=0.01)
     
@@ -308,7 +302,7 @@ def main():
         print(f"Current File: {current_file}/{total_files}")
 
         for window_size in context_windows:
-            n_gram_vocab, conns, heap_dict, version = train_model(data2_lst, window_size, n_gram_vocab, conns, current_file, conns_bank_max, heap_dict, version)
+            conns, heap_dict, version = train_model(data2_lst, window_size, conns, current_file, conns_bank_max, heap_dict, version)
 
         singular_dict_conns = {}
         for dct in conns.values():
