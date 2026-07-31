@@ -115,10 +115,9 @@ def train_model(data_tokens, win_size, conns_sizes, current_chunk, conns_bank_ma
         new_context = False
 
         if context in conns:
-            conns[context]["total"] += 1
             conns[context]["estimate"] += 1
         elif len(conns) < conns_bank_max[win_size]:
-            conns[context] = {"total": 1, "targets": {}, "seen": current_chunk, "start_epoch": file_epoch, "estimate": 1, "error": 0, "heap_version": 0, "valid_version": 0}
+            conns[context] = {"targets": {}, "seen": current_chunk, "start_epoch": file_epoch, "estimate": 1, "error": 0, "heap_version": 0, "valid_version": 0}
             new_context = True
         else:
             while True:
@@ -131,7 +130,7 @@ def train_model(data_tokens, win_size, conns_sizes, current_chunk, conns_bank_ma
             del conns[min_context]
 
             estimate = min_estimate + 1
-            conns[context] = {"total": estimate, "targets": {}, "seen": current_chunk, "start_epoch": file_epoch, "estimate": estimate, "error": min_estimate, "heap_version": 0, "valid_version": 0}
+            conns[context] = {"targets": {}, "seen": current_chunk, "start_epoch": file_epoch, "estimate": estimate, "error": min_estimate, "heap_version": 0, "valid_version": 0}
 
             new_context = True
 
@@ -150,7 +149,7 @@ def train_model(data_tokens, win_size, conns_sizes, current_chunk, conns_bank_ma
 
     return conns_sizes, heap_dict, version
 
-def n_gram_correction(model, optimizer, vocab_size, token_to_id, conns, districts, n_gram_influence, current_epoch, valid_heap, version):
+def n_gram_correction(model, optimizer, vocab_size, token_to_id, conns, districts, n_gram_influence, current_epoch, valid_heap, version, smoothing_factor):
     batch_size = 256
 
     contexts_length = [win_size for win_size in valid_heap if valid_heap[win_size] and (current_epoch - valid_heap[win_size][0][0]) >= districts]
@@ -189,7 +188,6 @@ def n_gram_correction(model, optimizer, vocab_size, token_to_id, conns, district
         
         inputs = []
         probs = []
-        confidences = []
         for context in chosen_contexts:
             conns[context]["start_epoch"] = current_epoch
             
@@ -198,7 +196,7 @@ def n_gram_correction(model, optimizer, vocab_size, token_to_id, conns, district
             heapq.heappush(valid_heap[context_length], (current_epoch, version, context))
 
             target_counts = conns[context]["targets"]
-            total_count = conns[context]["total"]
+            total_count = sum(target_counts.values())
 
             context_ids = [(token_to_id[token]) for token in context]
 
@@ -210,7 +208,6 @@ def n_gram_correction(model, optimizer, vocab_size, token_to_id, conns, district
 
             inputs.append(context_ids)
             probs.append(n_gram_probs)
-            confidences.append(total_count / (total_count + 2))
 
         if not inputs:
             continue
@@ -230,8 +227,7 @@ def n_gram_correction(model, optimizer, vocab_size, token_to_id, conns, district
         transformer_log_probs = F.log_softmax(transformer_logits, dim=-1)
         transformer_probs = (transformer_log_probs.exp().detach())
 
-        confidence = torch.tensor(confidences, dtype=torch.float32, device=model_device).unsqueeze(1)
-        correction_targets = ((1 - n_gram_influence) * transformer_probs + n_gram_influence * (confidence * n_gram_probs + (1 - confidence) * transformer_probs)).detach()
+        correction_targets = ((1 - n_gram_influence) * (n_gram_probs * transformer_probs)).detach()
 
         per_data_loss = -(correction_targets * transformer_log_probs).sum(dim=-1)
         total_loss = (total_loss + per_data_loss.sum())
